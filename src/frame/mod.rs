@@ -287,13 +287,35 @@ pub enum Request<'a> {
     /// or the specific object to read (individual access).
     ReadDeviceIdentification(ReadCode, ObjectId),
 
+    /// A custom Encapsulated Interface Transport request.
+    /// The first parameter is the MEI type.
+    /// The second parameter is the raw request data following the MEI type.
+    CustomEncapsulatedInterfaceTransport(u8, Cow<'a, [u8]>),
+
     /// A raw Modbus request.
     /// The first parameter is the Modbus function code.
     /// The second parameter is the raw bytes of the request.
     Custom(u8, Cow<'a, [u8]>),
 }
 
-impl Request<'_> {
+impl<'a> Request<'a> {
+    /// Creates a custom Encapsulated Interface Transport request using the
+    /// Read Device Identification MEI type (`0x0E`).
+    #[must_use]
+    pub fn encapsulated_interface_transport(data: Cow<'a, [u8]>) -> Self {
+        Self::CustomEncapsulatedInterfaceTransport(MEI_TYPE_READ_DEVICE_IDENTIFICATION, data)
+    }
+
+    /// Creates a custom Encapsulated Interface Transport request with an
+    /// explicit MEI type.
+    #[must_use]
+    pub fn encapsulated_interface_transport_with_mei_type(
+        mei_type: u8,
+        data: Cow<'a, [u8]>,
+    ) -> Self {
+        Self::CustomEncapsulatedInterfaceTransport(mei_type, data)
+    }
+
     /// Converts the request into an owned instance with `'static'` lifetime.
     #[must_use]
     pub fn into_owned(self) -> Request<'static> {
@@ -324,6 +346,10 @@ impl Request<'_> {
             ReadFifoQueue(addr) => ReadFifoQueue(addr),
             ReadDeviceIdentification(read_code, object_id) => {
                 ReadDeviceIdentification(read_code, object_id)
+            }
+
+            CustomEncapsulatedInterfaceTransport(mei_type, bytes) => {
+                CustomEncapsulatedInterfaceTransport(mei_type, Cow::Owned(bytes.into_owned()))
             }
 
             Custom(func, bytes) => Custom(func, Cow::Owned(bytes.into_owned())),
@@ -360,7 +386,9 @@ impl Request<'_> {
 
             ReadFifoQueue(_) => FunctionCode::ReadFifoQueue,
 
-            ReadDeviceIdentification(_, _) => FunctionCode::EncapsulatedInterfaceTransport,
+            ReadDeviceIdentification(_, _) | CustomEncapsulatedInterfaceTransport(_, _) => {
+                FunctionCode::EncapsulatedInterfaceTransport
+            }
 
             Custom(code, _) => FunctionCode::Custom(*code),
         }

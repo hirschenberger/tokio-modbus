@@ -132,6 +132,10 @@ fn encode_request_pdu(buf: &mut crate::bytes::BytesMut, request: &Request<'_>) {
             buf.put_u8(read_code.value());
             buf.put_u8(*object_id);
         }
+        CustomEncapsulatedInterfaceTransport(mei_type, custom_data) => {
+            buf.put_u8(*mei_type);
+            buf.put_slice(custom_data.as_ref());
+        }
         Custom(_, custom_data) => {
             buf.put_slice(custom_data.as_ref());
         }
@@ -401,9 +405,10 @@ fn decode_request_pdu_bytes(bytes: &Bytes) -> io::Result<Request<'static>> {
         0x2b => {
             let mei_type = rdr.read_u8()?;
             if mei_type != MEI_TYPE_READ_DEVICE_IDENTIFICATION {
-                return Err(Error::new(
-                    ErrorKind::InvalidData,
-                    format!("unsupported MEI type: {mei_type:#04X}"),
+                check_request_pdu_size(pdu_size)?;
+                return Ok(CustomEncapsulatedInterfaceTransport(
+                    mei_type,
+                    bytes[2..].to_vec().into(),
                 ));
             }
 
@@ -665,10 +670,8 @@ fn decode_response_pdu_bytes(bytes: Bytes) -> io::Result<Response> {
         0x2b => {
             let mei_type = rdr.read_u8()?;
             if mei_type != MEI_TYPE_READ_DEVICE_IDENTIFICATION {
-                return Err(Error::new(
-                    ErrorKind::InvalidData,
-                    format!("unsupported MEI type: {mei_type:#04X}"),
-                ));
+                check_response_pdu_size(pdu_size)?;
+                return Ok(Custom(fn_code, bytes.slice(1..)));
             }
 
             check_response_pdu_size(pdu_size)?;
@@ -839,6 +842,7 @@ fn request_pdu_size(request: &Request<'_>) -> io::Result<usize> {
         }
         ReadFifoQueue(_) => 3,
         ReadDeviceIdentification(_, _) => 4,
+        CustomEncapsulatedInterfaceTransport(_, data) => 2 + data.len(),
         Custom(_, data) => 1 + data.len(),
     };
     if size > MAX_PDU_SIZE {
@@ -1303,6 +1307,23 @@ mod tests {
             assert_eq!(bytes[3], 0xAA);
             assert_eq!(bytes[4], 0xFF);
         }
+
+        #[test]
+        fn custom_encapsulated_interface_transport() {
+            let request = Request::encapsulated_interface_transport_with_mei_type(
+                0x42,
+                Cow::Borrowed(&[0x11, 0x22]),
+            );
+            let bytes = encode_request_pdu_to_bytes(&request);
+            assert_eq!(&bytes[..], &[0x2B, 0x42, 0x11, 0x22]);
+        }
+
+        #[test]
+        fn custom_encapsulated_interface_transport_default_mei_type() {
+            let request = Request::encapsulated_interface_transport(Cow::Borrowed(&[0x11, 0x22]));
+            let bytes = encode_request_pdu_to_bytes(&request);
+            assert_eq!(&bytes[..], &[0x2B, 0x0E, 0x11, 0x22]);
+        }
     }
 
     mod deserialize_requests {
@@ -1483,6 +1504,16 @@ mod tests {
             let bytes = Bytes::from(vec![0x2B, 0x0E, 0x01, 0x01]);
             let req = Request::try_from(bytes).unwrap();
             assert_eq!(req, Request::ReadDeviceIdentification(ReadCode::Basic, 1));
+        }
+
+        #[test]
+        fn custom_encapsulated_interface_transport() {
+            let bytes = Bytes::from(vec![0x2B, 0x42, 0x11, 0x22]);
+            let req = Request::try_from(bytes).unwrap();
+            assert_eq!(
+                req,
+                Request::CustomEncapsulatedInterfaceTransport(0x42, Cow::Owned(vec![0x11, 0x22]))
+            );
         }
 
         #[test]
@@ -1818,6 +1849,16 @@ mod tests {
                         },
                     ],
                 })
+            );
+        }
+
+        #[test]
+        fn custom_encapsulated_interface_transport() {
+            let bytes = Bytes::from(vec![0x2B, 0x42, 0x11, 0x22]);
+            let response = Response::try_from(bytes).unwrap();
+            assert_eq!(
+                response,
+                Response::Custom(0x2B, Bytes::from_static(&[0x42, 0x11, 0x22]))
             );
         }
 
